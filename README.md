@@ -11,3 +11,6 @@
 5. 「＋」アイコンで、手順2で展開したzipを選択
 6. スイッチをONにして、実行するようにする
 7. 「作成」のタブに移動すると、「説明付き保存」というメニューが表示されるようになります
+
+# LICENSE
+　This project is licensed under MIT License. See the LICENSE file for details.
