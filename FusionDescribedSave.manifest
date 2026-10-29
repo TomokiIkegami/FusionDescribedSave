@@ -1,0 +1,10 @@
+{
+  "autodeskProduct": "Fusion360",
+  "type": "addin",
+  "author": "OpenAI",
+  "description": {
+    "": "Adds a required-description save command to Autodesk Fusion using a modal input dialog."
+  },
+  "supportedOS": "windows",
+  "editEnabled": true
+}
