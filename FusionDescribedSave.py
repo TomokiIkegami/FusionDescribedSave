@@ -1,4 +1,4 @@
-# Fusion Described Save v6
+# Fusion Described Save v1.0.0
 # Autodesk Fusion Python Add-In
 # Uses Fusion's native modal inputBox for a classic one-line description popup.
 
