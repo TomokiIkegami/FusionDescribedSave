@@ -1,0 +1,11 @@
+{
+  "autodeskProduct": "Fusion360",
+  "type": "addin",
+  "author": "Tomoki Ikegami",
+  "description": {
+    "": "Adds a required-description save command to Autodesk Fusion using a modal input dialog."
+  },
+  "version": "1.0.0",
+  "supportedOS": "windows",
+  "editEnabled": true
+}
