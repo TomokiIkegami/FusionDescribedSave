@@ -115,7 +115,9 @@ class SaveCommandExecuteHandler(adsk.core.CommandEventHandler):
                 _show_message('バージョンの説明が空欄のため、保存を中止しました。')
                 return
             doc = _app.activeDocument
-            if not doc: return
+            if not doc:
+                _show_message('保存するドキュメントが開かれていません。')
+                return
             if not doc.isSaved:
                 _show_message('このドキュメントはまだ一度も保存されていません。\n\n先にFusion標準の「名前を付けて保存」で保存先とファイル名を指定してください。')
                 return
