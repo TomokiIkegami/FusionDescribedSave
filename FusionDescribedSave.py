@@ -1,4 +1,4 @@
-# Fusion Described Save v1.0.3
+# Fusion Described Save v1.0.4
 # Autodesk Fusion Python Add-In
 
 import adsk.core
@@ -12,10 +12,10 @@ _custom_save_event = None
 _custom_save_handler = None
 
 ADDIN_NAME = 'FusionDescribedSave'
-COMMAND_ID = 'FusionDescribedSaveCommandV8'
+COMMAND_ID = 'FusionDescribedSaveCommandV9'
 COMMAND_NAME = '説明付き保存'
 COMMAND_DESCRIPTION = '説明を入力して、現在のデザインを説明付きで保存します。'
-CUSTOM_EVENT_ID = 'FusionDescribedSaveDeferredEventV8'
+CUSTOM_EVENT_ID = 'FusionDescribedSaveDeferredEventV9'
 
 def _show_message(message):
     try:
@@ -98,6 +98,9 @@ def run(context):
     try:
         _app = adsk.core.Application.get()
         _ui = _app.userInterface
+        
+        # ★重要★ スクリプトとして実行されても即座に終了させず、ボタンを有効に保つ
+        adsk.autoTerminate(False)
 
         _custom_save_event = _app.registerCustomEvent(CUSTOM_EVENT_ID)
         _custom_save_handler = DeferredSaveEventHandler()
@@ -119,11 +122,9 @@ def run(context):
             _show_message('ツールバーの取得に失敗しました。')
             return
             
-        # 1. ファイルメニューをIDではなく「ドロップダウン」プロパティから動的に検索する
         file_menu = None
         for ctrl in qat.controls:
             if ctrl.objectType == adsk.core.DropDownControl.classType():
-                # IDに 'file' または 'app' が含まれるドロップダウンをファイルメニューとみなす
                 if 'file' in ctrl.id.lower() or 'app' in ctrl.id.lower():
                     file_menu = ctrl
                     break
@@ -133,18 +134,20 @@ def run(context):
             control = file_menu.controls.itemById(COMMAND_ID)
             if not control:
                 try:
-                    # 標準の「名前を付けて保存 (SaveAsCommand)」の上に挿入
-                    control = file_menu.controls.addCommand(cmd_def, 'SaveAsCommand')
+                    # 「Export...」の直前に挿入を試みる（Saveのブロックに入りやすい）
+                    control = file_menu.controls.addCommand(cmd_def, 'ExportCommand')
                 except:
-                    # 失敗したらメニューの一番下に追加
-                    control = file_menu.controls.addCommand(cmd_def)
+                    try:
+                        # 失敗したら「Save As」の直前に挿入
+                        control = file_menu.controls.addCommand(cmd_def, 'SaveAsCommand')
+                    except:
+                        # 全て失敗したらメニューの一番下に追加
+                        control = file_menu.controls.addCommand(cmd_def)
         
-        # 2. ファイルメニューが見つからなかった、または追加に失敗した場合のフォールバック
         if not control:
             control = qat.controls.itemById(COMMAND_ID)
             if not control:
                 try:
-                    # QAT（左上のツールバー）の標準保存ボタンの隣（Undoの前）に配置
                     control = qat.controls.addCommand(cmd_def, 'UndoCommand')
                 except:
                     control = qat.controls.addCommand(cmd_def)
@@ -155,7 +158,7 @@ def run(context):
             _show_message('ボタンの追加に失敗しました。')
 
     except:
-        _show_message('アドインの起動中にエラーが発生しました。\n\n' + traceback.format_exc())
+        _show_message('起動中にエラーが発生しました。\n\n' + traceback.format_exc())
 
 
 def stop(context):
@@ -164,27 +167,26 @@ def stop(context):
         if _ui:
             qat = _ui.toolbars.itemById('QAT')
             if qat:
-                # ファイルメニュー内のクリーンアップ
                 for ctrl in qat.controls:
                     if ctrl.objectType == adsk.core.DropDownControl.classType() and ('file' in ctrl.id.lower() or 'app' in ctrl.id.lower()):
-                        for c_id in (COMMAND_ID, 'FusionDescribedSaveCommandV7'):
+                        # 古いバージョンのゾンビボタンもまとめて掃除する
+                        for c_id in (COMMAND_ID, 'FusionDescribedSaveCommandV7', 'FusionDescribedSaveCommandV8'):
                             control = ctrl.controls.itemById(c_id)
                             if control:
                                 control.deleteMe()
                                 
-                # QAT直下のクリーンアップ（フォールバック時）
-                for c_id in (COMMAND_ID, 'FusionDescribedSaveCommandV7'):
+                for c_id in (COMMAND_ID, 'FusionDescribedSaveCommandV7', 'FusionDescribedSaveCommandV8'):
                     control = qat.controls.itemById(c_id)
                     if control:
                         control.deleteMe()
 
-            for command_id in (COMMAND_ID, 'FusionDescribedSaveCommandV7'):
+            for command_id in (COMMAND_ID, 'FusionDescribedSaveCommandV7', 'FusionDescribedSaveCommandV8'):
                 cmd_def = _ui.commandDefinitions.itemById(command_id)
                 if cmd_def:
                     cmd_def.deleteMe()
 
         if _app:
-            for event_id in (CUSTOM_EVENT_ID, 'FusionDescribedSaveDeferredEventV7'):
+            for event_id in (CUSTOM_EVENT_ID, 'FusionDescribedSaveDeferredEventV7', 'FusionDescribedSaveDeferredEventV8'):
                 try:
                     _app.unregisterCustomEvent(event_id)
                 except:
