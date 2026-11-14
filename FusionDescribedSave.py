@@ -1,6 +1,5 @@
-# Fusion Described Save v1.0.1
+# Fusion Described Save v1.0.2
 # Autodesk Fusion Python Add-In
-# Uses Fusion's native modal inputBox for a classic one-line description popup.
 
 import adsk.core
 import adsk.fusion
@@ -13,12 +12,10 @@ _custom_save_event = None
 _custom_save_handler = None
 
 ADDIN_NAME = 'FusionDescribedSave'
-COMMAND_ID = 'FusionDescribedSaveCommandV6'
+COMMAND_ID = 'FusionDescribedSaveCommandV7' # 古いボタンと干渉しないようIDを更新
 COMMAND_NAME = '説明付き保存'
 COMMAND_DESCRIPTION = '説明を入力して、現在のデザインを説明付きで保存します。'
-CUSTOM_EVENT_ID = 'FusionDescribedSaveDeferredEventV6'
-QAT_ID = 'QAT'  # Quick Access Toolbar (upper-left area)
-
+CUSTOM_EVENT_ID = 'FusionDescribedSaveDeferredEventV7'
 
 def _show_message(message):
     try:
@@ -48,7 +45,6 @@ class SaveCommandExecuteHandler(adsk.core.CommandEventHandler):
 
     def notify(self, args):
         try:
-            # Native modal dialog, similar to Fusion's older description prompt.
             description, cancelled = _ui.inputBox(
                 'バージョンの説明を入力してください。',
                 '説明付き保存',
@@ -135,21 +131,31 @@ def run(context):
         cmd_def.commandCreated.add(on_created)
         _handlers.append(on_created)
 
-        # Add a context-independent button to the upper-left Quick Access Toolbar.
-        # QAT is available across Fusion workspaces, including Electronics workflows.
-        qat = _ui.toolbars.itemById(QAT_ID)
+        # ファイルメニュー（アプリケーションメニュー）を取得
+        qat = _ui.toolbars.itemById('QAT')
         if not qat:
-            _show_message('クイックアクセスツールバー（QAT）が見つかりませんでした。')
+            _show_message('ツールバーの取得に失敗しました。')
+            return
+            
+        file_menu = qat.controls.itemById('FileSubMenu')
+        if not file_menu:
+            _show_message('ファイルメニューが見つかりませんでした。')
             return
 
-        control = qat.controls.itemById(COMMAND_ID)
+        control = file_menu.controls.itemById(COMMAND_ID)
         if not control:
-            control = qat.controls.addCommand(cmd_def)
+            # 標準の「名前を付けて保存 (SaveAsCommand)」の上に挿入を試みる
+            # 成功すれば標準の「保存」と「名前を付けて保存/バージョンを作成」の間に配置されます
+            try:
+                control = file_menu.controls.addCommand(cmd_def, 'SaveAsCommand')
+            except:
+                # 失敗した場合はメニューの最後に追加
+                control = file_menu.controls.addCommand(cmd_def)
 
         if control:
             control.isVisible = True
         else:
-            _show_message('アドインは起動しましたが、QATへのボタン追加に失敗しました。')
+            _show_message('アドインは起動しましたが、ファイルメニューへのボタン追加に失敗しました。')
 
     except:
         _show_message('アドインの起動中にエラーが発生しました。\n\n' + traceback.format_exc())
@@ -159,52 +165,36 @@ def stop(context):
     global _app, _ui, _custom_save_event, _custom_save_handler
     try:
         if _ui:
-            # Remove the QAT button created by this add-in.
-            qat = _ui.toolbars.itemById(QAT_ID)
+            # FileSubMenuからのクリーンアップ
+            qat = _ui.toolbars.itemById('QAT')
             if qat:
-                control = qat.controls.itemById(COMMAND_ID)
-                if control:
-                    control.deleteMe()
+                file_menu = qat.controls.itemById('FileSubMenu')
+                if file_menu:
+                    for c_id in (COMMAND_ID, 'FusionDescribedSaveCommandV6'):
+                        control = file_menu.controls.itemById(c_id)
+                        if control:
+                            control.deleteMe()
+                            
+                # 以前のバージョン（QAT直下）のゴミが残っていれば消去
+                for c_id in (COMMAND_ID, 'FusionDescribedSaveCommandV6'):
+                    control = qat.controls.itemById(c_id)
+                    if control:
+                        control.deleteMe()
 
-            # Also remove older versions that may have been placed in workspace panels.
-            workspace = _ui.workspaces.itemById('FusionSolidEnvironment')
-            if workspace:
-                for panel_id in ('SolidCreatePanel', 'SolidModifyPanel'):
-                    panel = workspace.toolbarPanels.itemById(panel_id)
-                    if panel:
-                        for control_id in (
-                            COMMAND_ID,
-                            'FusionDescribedSaveCommand',
-                            'FusionDescribedSaveCommandV4',
-                            'FusionDescribedSaveCommandV5',
-                        ):
-                            control = panel.controls.itemById(control_id)
-                            if control:
-                                control.deleteMe()
-
-            for command_id in (
-                'FusionDescribedSaveCommand',
-                'FusionDescribedSaveCommandV4',
-                'FusionDescribedSaveCommandV5',
-            ):
+            for command_id in (COMMAND_ID, 'FusionDescribedSaveCommandV6'):
                 cmd_def = _ui.commandDefinitions.itemById(command_id)
                 if cmd_def:
                     cmd_def.deleteMe()
 
         if _app:
-            for event_id in (
-                'FusionDescribedSaveDeferredEvent',
-                'FusionDescribedSaveDeferredEventV4',
-                'FusionDescribedSaveDeferredEventV5',
-                CUSTOM_EVENT_ID,
-            ):
+            for event_id in (CUSTOM_EVENT_ID, 'FusionDescribedSaveDeferredEventV6'):
                 try:
                     _app.unregisterCustomEvent(event_id)
                 except:
                     pass
 
     except:
-        _show_message('アドイン停止時にエラーが発生しました。\n\n' + traceback.format_exc())
+        pass
     finally:
         _handlers.clear()
         _custom_save_event = None
