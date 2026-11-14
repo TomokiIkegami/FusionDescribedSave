@@ -1,4 +1,4 @@
-# Fusion Described Save v1.0.6
+# Fusion Described Save v1.0.7
 # Autodesk Fusion Python Add-In
 
 import adsk.core
@@ -8,14 +8,21 @@ import traceback
 _app = None
 _ui = None
 _handlers = []
+
+# 保存実行用イベント
+CUSTOM_SAVE_EVENT_ID = 'FusionDescribedSaveEvent_V12'
 _custom_save_event = None
 _custom_save_handler = None
 
+# UI再構築（遅延実行）用イベント
+CUSTOM_REBUILD_EVENT_ID = 'FusionDescribedSaveRebuild_V12'
+_custom_rebuild_event = None
+_custom_rebuild_handler = None
+
 ADDIN_NAME = 'FusionDescribedSave'
-COMMAND_ID = 'FusionDescribedSaveCmd_V11'
+COMMAND_ID = 'FusionDescribedSaveCmd_V12'
 COMMAND_NAME = '説明付き保存'
 COMMAND_DESCRIPTION = '説明を入力して、現在のデザインを説明付きで保存します。'
-CUSTOM_EVENT_ID = 'FusionDescribedSaveEvent_V11'
 
 def _show_message(message):
     try:
@@ -24,7 +31,7 @@ def _show_message(message):
         pass
 
 def force_rebuild_ui():
-    """環境が切り替わるたびにボタンを破壊＆再構築してグレーアウトを回避する"""
+    """古いボタンを破壊し、新しいボタンを配置する実処理"""
     global _handlers
     try:
         if not _ui: return
@@ -36,7 +43,7 @@ def force_rebuild_ui():
                     file_menu = ctrl
                     break
 
-        # 1. グレーアウトした古いボタンと定義を徹底的にクリーンアップ
+        # 1. クリーンアップ
         if file_menu:
             old_ctrl = file_menu.controls.itemById(COMMAND_ID)
             if old_ctrl: old_ctrl.deleteMe()
@@ -47,23 +54,16 @@ def force_rebuild_ui():
         cmd_def = _ui.commandDefinitions.itemById(COMMAND_ID)
         if cmd_def: cmd_def.deleteMe()
 
-        # メモリリーク防止：古いハンドラをリストから除去
         _handlers = [h for h in _handlers if not isinstance(h, SaveCommandCreatedHandler)]
 
-        # 2. 現在の環境（3D PCB等）で新鮮なボタンとして再作成
+        # 2. 再構築
         cmd_def = _ui.commandDefinitions.addButtonDefinition(COMMAND_ID, COMMAND_NAME, COMMAND_DESCRIPTION)
         
-        try:
-            # 強制的に有効化を指示
-            cmd_def.isEnabled = True
-        except:
-            pass
-
         on_created = SaveCommandCreatedHandler()
         cmd_def.commandCreated.add(on_created)
         _handlers.append(on_created)
 
-        # 3. ファイルメニューへ再配置
+        # 3. 再配置
         if file_menu:
             try:
                 new_ctrl = file_menu.controls.addCommand(cmd_def, 'ExportCommand')
@@ -72,14 +72,23 @@ def force_rebuild_ui():
                     new_ctrl = file_menu.controls.addCommand(cmd_def, 'SaveAsCommand')
                 except:
                     new_ctrl = file_menu.controls.addCommand(cmd_def)
-            if new_ctrl:
-                new_ctrl.isVisible = True
+            if new_ctrl: new_ctrl.isVisible = True
         elif qat:
             new_ctrl = qat.controls.addCommand(cmd_def)
-            if new_ctrl:
-                new_ctrl.isVisible = True
+            if new_ctrl: new_ctrl.isVisible = True
     except:
         pass
+
+
+# ==========================================
+# 遅延実行（イベントキューイング）用ハンドラ
+# ==========================================
+class RebuildUIEventHandler(adsk.core.CustomEventHandler):
+    def __init__(self):
+        super().__init__()
+    def notify(self, args):
+        # Fusion本体の重い処理が終わったあとに呼ばれる
+        force_rebuild_ui()
 
 
 class SaveCommandCreatedHandler(adsk.core.CommandCreatedEventHandler):
@@ -106,13 +115,11 @@ class SaveCommandExecuteHandler(adsk.core.CommandEventHandler):
                 _show_message('バージョンの説明が空欄のため、保存を中止しました。')
                 return
             doc = _app.activeDocument
-            if not doc:
-                _show_message('保存するドキュメントが開かれていません。')
-                return
+            if not doc: return
             if not doc.isSaved:
                 _show_message('このドキュメントはまだ一度も保存されていません。\n\n先にFusion標準の「名前を付けて保存」で保存先とファイル名を指定してください。')
                 return
-            _app.fireCustomEvent(CUSTOM_EVENT_ID, description)
+            _app.fireCustomEvent(CUSTOM_SAVE_EVENT_ID, description)
         except:
             _show_message('保存要求の準備中にエラーが発生しました。\n\n' + traceback.format_exc())
 
@@ -134,6 +141,7 @@ class DeferredSaveEventHandler(adsk.core.CustomEventHandler):
         except:
             _show_message('説明付き保存中にエラーが発生しました。\n\n' + traceback.format_exc())
 
+
 # ==========================================
 # ワークスペース・ドキュメント切り替え検知
 # ==========================================
@@ -141,30 +149,37 @@ class WorkspaceActivatedHandler(adsk.core.WorkspaceEventHandler):
     def __init__(self):
         super().__init__()
     def notify(self, args):
-        force_rebuild_ui()
+        # すぐにUIを作らず、Fusionの処理待ちキューに「あとで作ってね」と投げる
+        if _app: _app.fireCustomEvent(CUSTOM_REBUILD_EVENT_ID)
 
 class DocumentActivatedHandler(adsk.core.DocumentEventHandler):
     def __init__(self):
         super().__init__()
     def notify(self, args):
-        force_rebuild_ui()
+        if _app: _app.fireCustomEvent(CUSTOM_REBUILD_EVENT_ID)
 
 
 def run(context):
-    global _app, _ui, _custom_save_event, _custom_save_handler
+    global _app, _ui, _custom_save_event, _custom_save_handler, _custom_rebuild_event, _custom_rebuild_handler
     try:
         _app = adsk.core.Application.get()
         _ui = _app.userInterface
         
-        # スクリプトとして実行されてもプロセスを維持する
         adsk.autoTerminate(False)
 
-        _custom_save_event = _app.registerCustomEvent(CUSTOM_EVENT_ID)
+        # 保存用カスタムイベント登録
+        _custom_save_event = _app.registerCustomEvent(CUSTOM_SAVE_EVENT_ID)
         _custom_save_handler = DeferredSaveEventHandler()
         _custom_save_event.add(_custom_save_handler)
         _handlers.append(_custom_save_handler)
 
-        # 切り替え時にボタンを再構築するリスナーを登録
+        # UI再構築用カスタムイベント登録（NEW!）
+        _custom_rebuild_event = _app.registerCustomEvent(CUSTOM_REBUILD_EVENT_ID)
+        _custom_rebuild_handler = RebuildUIEventHandler()
+        _custom_rebuild_event.add(_custom_rebuild_handler)
+        _handlers.append(_custom_rebuild_handler)
+
+        # 切り替え検知リスナー登録
         on_workspace_activated = WorkspaceActivatedHandler()
         _ui.workspaceActivated.add(on_workspace_activated)
         _handlers.append(on_workspace_activated)
@@ -173,35 +188,35 @@ def run(context):
         _app.documentActivated.add(on_document_activated)
         _handlers.append(on_document_activated)
 
-        # 初回起動時のUI構築
-        force_rebuild_ui()
+        # 初回起動時のUI構築もキューに入れる
+        _app.fireCustomEvent(CUSTOM_REBUILD_EVENT_ID)
 
     except:
         _show_message('起動中にエラーが発生しました。\n\n' + traceback.format_exc())
 
 
 def stop(context):
-    global _app, _ui, _custom_save_event, _custom_save_handler
+    global _app, _ui, _custom_save_event, _custom_save_handler, _custom_rebuild_event, _custom_rebuild_handler
     try:
         if _ui:
             qat = _ui.toolbars.itemById('QAT')
             if qat:
                 for ctrl in qat.controls:
                     if ctrl.objectType == adsk.core.DropDownControl.classType() and ('file' in ctrl.id.lower() or 'app' in ctrl.id.lower()):
-                        for c_id in (COMMAND_ID, 'FusionDescribedSaveCommandV9', 'FusionDescribedSaveCommandV10'):
+                        for c_id in (COMMAND_ID, 'FusionDescribedSaveCmd_V11', 'FusionDescribedSaveCmd_V12'):
                             control = ctrl.controls.itemById(c_id)
                             if control: control.deleteMe()
                             
-                for c_id in (COMMAND_ID, 'FusionDescribedSaveCommandV9', 'FusionDescribedSaveCommandV10'):
+                for c_id in (COMMAND_ID, 'FusionDescribedSaveCmd_V11', 'FusionDescribedSaveCmd_V12'):
                     control = qat.controls.itemById(c_id)
                     if control: control.deleteMe()
 
-            for command_id in (COMMAND_ID, 'FusionDescribedSaveCommandV9', 'FusionDescribedSaveCommandV10'):
+            for command_id in (COMMAND_ID, 'FusionDescribedSaveCmd_V11', 'FusionDescribedSaveCmd_V12'):
                 cmd_def = _ui.commandDefinitions.itemById(command_id)
                 if cmd_def: cmd_def.deleteMe()
 
         if _app:
-            for event_id in (CUSTOM_EVENT_ID, 'FusionDescribedSaveDeferredEventV9', 'FusionDescribedSaveDeferredEventV10'):
+            for event_id in (CUSTOM_SAVE_EVENT_ID, CUSTOM_REBUILD_EVENT_ID, 'FusionDescribedSaveEvent_V11', 'FusionDescribedSaveEvent_V12'):
                 try:
                     _app.unregisterCustomEvent(event_id)
                 except:
@@ -212,5 +227,7 @@ def stop(context):
         _handlers.clear()
         _custom_save_event = None
         _custom_save_handler = None
+        _custom_rebuild_event = None
+        _custom_rebuild_handler = None
         _app = None
         _ui = None
