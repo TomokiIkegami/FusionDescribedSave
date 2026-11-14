@@ -1,4 +1,4 @@
-# Fusion Described Save v1.0.0
+# Fusion Described Save v1.0.1
 # Autodesk Fusion Python Add-In
 # Uses Fusion's native modal inputBox for a classic one-line description popup.
 
@@ -17,8 +17,7 @@ COMMAND_ID = 'FusionDescribedSaveCommandV6'
 COMMAND_NAME = '説明付き保存'
 COMMAND_DESCRIPTION = '説明を入力して、現在のデザインを説明付きで保存します。'
 CUSTOM_EVENT_ID = 'FusionDescribedSaveDeferredEventV6'
-WORKSPACE_ID = 'FusionSolidEnvironment'
-PANEL_ID = 'SolidCreatePanel'
+QAT_ID = 'QAT'  # Quick Access Toolbar (upper-left area)
 
 
 def _show_message(message):
@@ -136,22 +135,21 @@ def run(context):
         cmd_def.commandCreated.add(on_created)
         _handlers.append(on_created)
 
-        workspace = _ui.workspaces.itemById(WORKSPACE_ID)
-        if not workspace:
-            _show_message('Fusionのデザイン環境が見つかりませんでした。')
+        # Add a context-independent button to the upper-left Quick Access Toolbar.
+        # QAT is available across Fusion workspaces, including Electronics workflows.
+        qat = _ui.toolbars.itemById(QAT_ID)
+        if not qat:
+            _show_message('クイックアクセスツールバー（QAT）が見つかりませんでした。')
             return
 
-        panel = workspace.toolbarPanels.itemById(PANEL_ID)
-        if not panel:
-            panel = workspace.toolbarPanels.itemById('SolidModifyPanel')
+        control = qat.controls.itemById(COMMAND_ID)
+        if not control:
+            control = qat.controls.addCommand(cmd_def)
 
-        if panel:
-            control = panel.controls.itemById(COMMAND_ID)
-            if not control:
-                control = panel.controls.addCommand(cmd_def)
-            control.isPromoted = True
+        if control:
+            control.isVisible = True
         else:
-            _show_message('アドインは起動しましたが、配置先のツールバーパネルが見つかりませんでした。')
+            _show_message('アドインは起動しましたが、QATへのボタン追加に失敗しました。')
 
     except:
         _show_message('アドインの起動中にエラーが発生しました。\n\n' + traceback.format_exc())
@@ -161,9 +159,17 @@ def stop(context):
     global _app, _ui, _custom_save_event, _custom_save_handler
     try:
         if _ui:
-            workspace = _ui.workspaces.itemById(WORKSPACE_ID)
+            # Remove the QAT button created by this add-in.
+            qat = _ui.toolbars.itemById(QAT_ID)
+            if qat:
+                control = qat.controls.itemById(COMMAND_ID)
+                if control:
+                    control.deleteMe()
+
+            # Also remove older versions that may have been placed in workspace panels.
+            workspace = _ui.workspaces.itemById('FusionSolidEnvironment')
             if workspace:
-                for panel_id in (PANEL_ID, 'SolidModifyPanel'):
+                for panel_id in ('SolidCreatePanel', 'SolidModifyPanel'):
                     panel = workspace.toolbarPanels.itemById(panel_id)
                     if panel:
                         for control_id in (
