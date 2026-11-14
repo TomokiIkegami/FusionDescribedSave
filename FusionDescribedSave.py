@@ -1,4 +1,4 @@
-# Fusion Described Save v1.0.5
+# Fusion Described Save v1.0.6
 # Autodesk Fusion Python Add-In
 
 import adsk.core
@@ -12,42 +12,59 @@ _custom_save_event = None
 _custom_save_handler = None
 
 ADDIN_NAME = 'FusionDescribedSave'
-COMMAND_ID = 'FusionDescribedSaveCommandV10'
+COMMAND_ID = 'FusionDescribedSaveCmd_V11'
 COMMAND_NAME = '説明付き保存'
 COMMAND_DESCRIPTION = '説明を入力して、現在のデザインを説明付きで保存します。'
-CUSTOM_EVENT_ID = 'FusionDescribedSaveDeferredEventV10'
+CUSTOM_EVENT_ID = 'FusionDescribedSaveEvent_V11'
 
 def _show_message(message):
     try:
-        if _ui:
-            _ui.messageBox(message, ADDIN_NAME)
+        if _ui: _ui.messageBox(message, ADDIN_NAME)
     except:
         pass
 
-def refresh_ui():
-    """UI（ファイルメニュー）の状態を監視し、ボタンが死んでいたら再構築する"""
+def force_rebuild_ui():
+    """環境が切り替わるたびにボタンを破壊＆再構築してグレーアウトを回避する"""
+    global _handlers
     try:
         if not _ui: return
         qat = _ui.toolbars.itemById('QAT')
-        if not qat: return
-        
         file_menu = None
-        for ctrl in qat.controls:
-            if ctrl.objectType == adsk.core.DropDownControl.classType():
-                if 'file' in ctrl.id.lower() or 'app' in ctrl.id.lower():
+        if qat:
+            for ctrl in qat.controls:
+                if ctrl.objectType == adsk.core.DropDownControl.classType() and ('file' in ctrl.id.lower() or 'app' in ctrl.id.lower()):
                     file_menu = ctrl
                     break
 
-        cmd_def = _ui.commandDefinitions.itemById(COMMAND_ID)
-        if not cmd_def: return
-
+        # 1. グレーアウトした古いボタンと定義を徹底的にクリーンアップ
         if file_menu:
-            # 既存のボタンがあれば一度削除してクリーンにする（ゾンビ化対策）
-            existing_ctrl = file_menu.controls.itemById(COMMAND_ID)
-            if existing_ctrl:
-                existing_ctrl.deleteMe()
-            
-            # 新鮮なボタンを再配置
+            old_ctrl = file_menu.controls.itemById(COMMAND_ID)
+            if old_ctrl: old_ctrl.deleteMe()
+        if qat:
+            old_qat = qat.controls.itemById(COMMAND_ID)
+            if old_qat: old_qat.deleteMe()
+
+        cmd_def = _ui.commandDefinitions.itemById(COMMAND_ID)
+        if cmd_def: cmd_def.deleteMe()
+
+        # メモリリーク防止：古いハンドラをリストから除去
+        _handlers = [h for h in _handlers if not isinstance(h, SaveCommandCreatedHandler)]
+
+        # 2. 現在の環境（3D PCB等）で新鮮なボタンとして再作成
+        cmd_def = _ui.commandDefinitions.addButtonDefinition(COMMAND_ID, COMMAND_NAME, COMMAND_DESCRIPTION)
+        
+        try:
+            # 強制的に有効化を指示
+            cmd_def.isEnabled = True
+        except:
+            pass
+
+        on_created = SaveCommandCreatedHandler()
+        cmd_def.commandCreated.add(on_created)
+        _handlers.append(on_created)
+
+        # 3. ファイルメニューへ再配置
+        if file_menu:
             try:
                 new_ctrl = file_menu.controls.addCommand(cmd_def, 'ExportCommand')
             except:
@@ -55,7 +72,10 @@ def refresh_ui():
                     new_ctrl = file_menu.controls.addCommand(cmd_def, 'SaveAsCommand')
                 except:
                     new_ctrl = file_menu.controls.addCommand(cmd_def)
-                    
+            if new_ctrl:
+                new_ctrl.isVisible = True
+        elif qat:
+            new_ctrl = qat.controls.addCommand(cmd_def)
             if new_ctrl:
                 new_ctrl.isVisible = True
     except:
@@ -114,23 +134,20 @@ class DeferredSaveEventHandler(adsk.core.CustomEventHandler):
         except:
             _show_message('説明付き保存中にエラーが発生しました。\n\n' + traceback.format_exc())
 
-
 # ==========================================
-# 環境（ワークスペース）切り替え検知用リスナー
+# ワークスペース・ドキュメント切り替え検知
 # ==========================================
 class WorkspaceActivatedHandler(adsk.core.WorkspaceEventHandler):
     def __init__(self):
         super().__init__()
     def notify(self, args):
-        # 3D PCB等に切り替わった瞬間にボタンを再構築
-        refresh_ui()
+        force_rebuild_ui()
 
 class DocumentActivatedHandler(adsk.core.DocumentEventHandler):
     def __init__(self):
         super().__init__()
     def notify(self, args):
-        # 別タブ等に切り替わった瞬間にボタンを再構築
-        refresh_ui()
+        force_rebuild_ui()
 
 
 def run(context):
@@ -139,6 +156,7 @@ def run(context):
         _app = adsk.core.Application.get()
         _ui = _app.userInterface
         
+        # スクリプトとして実行されてもプロセスを維持する
         adsk.autoTerminate(False)
 
         _custom_save_event = _app.registerCustomEvent(CUSTOM_EVENT_ID)
@@ -146,17 +164,7 @@ def run(context):
         _custom_save_event.add(_custom_save_handler)
         _handlers.append(_custom_save_handler)
 
-        cmd_def = _ui.commandDefinitions.itemById(COMMAND_ID)
-        if not cmd_def:
-            cmd_def = _ui.commandDefinitions.addButtonDefinition(
-                COMMAND_ID, COMMAND_NAME, COMMAND_DESCRIPTION
-            )
-
-        on_created = SaveCommandCreatedHandler()
-        cmd_def.commandCreated.add(on_created)
-        _handlers.append(on_created)
-
-        # ワークスペース/ドキュメント切り替え時にUIをリフレッシュするイベントを登録
+        # 切り替え時にボタンを再構築するリスナーを登録
         on_workspace_activated = WorkspaceActivatedHandler()
         _ui.workspaceActivated.add(on_workspace_activated)
         _handlers.append(on_workspace_activated)
@@ -166,7 +174,7 @@ def run(context):
         _handlers.append(on_document_activated)
 
         # 初回起動時のUI構築
-        refresh_ui()
+        force_rebuild_ui()
 
     except:
         _show_message('起動中にエラーが発生しました。\n\n' + traceback.format_exc())
