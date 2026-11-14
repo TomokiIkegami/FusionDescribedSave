@@ -1,4 +1,4 @@
-# Fusion Described Save v1.0.2
+# Fusion Described Save v1.0.3
 # Autodesk Fusion Python Add-In
 
 import adsk.core
@@ -12,10 +12,10 @@ _custom_save_event = None
 _custom_save_handler = None
 
 ADDIN_NAME = 'FusionDescribedSave'
-COMMAND_ID = 'FusionDescribedSaveCommandV7' # 古いボタンと干渉しないようIDを更新
+COMMAND_ID = 'FusionDescribedSaveCommandV8'
 COMMAND_NAME = '説明付き保存'
 COMMAND_DESCRIPTION = '説明を入力して、現在のデザインを説明付きで保存します。'
-CUSTOM_EVENT_ID = 'FusionDescribedSaveDeferredEventV7'
+CUSTOM_EVENT_ID = 'FusionDescribedSaveDeferredEventV8'
 
 def _show_message(message):
     try:
@@ -24,11 +24,9 @@ def _show_message(message):
     except:
         pass
 
-
 class SaveCommandCreatedHandler(adsk.core.CommandCreatedEventHandler):
     def __init__(self):
         super().__init__()
-
     def notify(self, args):
         try:
             cmd = args.command
@@ -38,11 +36,9 @@ class SaveCommandCreatedHandler(adsk.core.CommandCreatedEventHandler):
         except:
             _show_message('入力ポップアップの準備中にエラーが発生しました。\n\n' + traceback.format_exc())
 
-
 class SaveCommandExecuteHandler(adsk.core.CommandEventHandler):
     def __init__(self):
         super().__init__()
-
     def notify(self, args):
         try:
             description, cancelled = _ui.inputBox(
@@ -50,65 +46,52 @@ class SaveCommandExecuteHandler(adsk.core.CommandEventHandler):
                 '説明付き保存',
                 ''
             )
-
             if cancelled:
                 return
-
             description = (description or '').strip()
             if not description:
                 _show_message('バージョンの説明が空欄のため、保存を中止しました。')
                 return
-
             doc = _app.activeDocument
             if not doc:
                 _show_message('保存するドキュメントが開かれていません。')
                 return
-
             if not doc.isSaved:
                 _show_message(
                     'このドキュメントはまだ一度も保存されていません。\n\n'
                     '先にFusion標準の「名前を付けて保存」で保存先とファイル名を指定してください。'
                 )
                 return
-
             _app.fireCustomEvent(CUSTOM_EVENT_ID, description)
-
         except:
             _show_message('保存要求の準備中にエラーが発生しました。\n\n' + traceback.format_exc())
-
 
 class DeferredSaveEventHandler(adsk.core.CustomEventHandler):
     def __init__(self):
         super().__init__()
-
     def notify(self, args):
         try:
             description = (args.additionalInfo or '').strip()
             if not description:
                 _show_message('説明が空欄のため、保存を中止しました。')
                 return
-
             doc = _app.activeDocument
             if not doc:
                 _show_message('保存するドキュメントが見つかりません。')
                 return
-
             if not doc.isSaved:
                 _show_message(
                     'このドキュメントは未保存のため、説明付き保存を実行できません。\n'
                     '先に「名前を付けて保存」を実行してください。'
                 )
                 return
-
             result = doc.save(description)
             if result:
                 _show_message('説明付きで保存しました。\n\nバージョンの説明：\n' + description)
             else:
                 _show_message('Fusionが保存に失敗したと報告しました。ネットワーク接続やデータパネルを確認してください。')
-
         except:
             _show_message('説明付き保存中にエラーが発生しました。\n\n' + traceback.format_exc())
-
 
 def run(context):
     global _app, _ui, _custom_save_event, _custom_save_handler
@@ -131,31 +114,45 @@ def run(context):
         cmd_def.commandCreated.add(on_created)
         _handlers.append(on_created)
 
-        # ファイルメニュー（アプリケーションメニュー）を取得
         qat = _ui.toolbars.itemById('QAT')
         if not qat:
             _show_message('ツールバーの取得に失敗しました。')
             return
             
-        file_menu = qat.controls.itemById('FileSubMenu')
-        if not file_menu:
-            _show_message('ファイルメニューが見つかりませんでした。')
-            return
+        # 1. ファイルメニューをIDではなく「ドロップダウン」プロパティから動的に検索する
+        file_menu = None
+        for ctrl in qat.controls:
+            if ctrl.objectType == adsk.core.DropDownControl.classType():
+                # IDに 'file' または 'app' が含まれるドロップダウンをファイルメニューとみなす
+                if 'file' in ctrl.id.lower() or 'app' in ctrl.id.lower():
+                    file_menu = ctrl
+                    break
 
-        control = file_menu.controls.itemById(COMMAND_ID)
+        control = None
+        if file_menu:
+            control = file_menu.controls.itemById(COMMAND_ID)
+            if not control:
+                try:
+                    # 標準の「名前を付けて保存 (SaveAsCommand)」の上に挿入
+                    control = file_menu.controls.addCommand(cmd_def, 'SaveAsCommand')
+                except:
+                    # 失敗したらメニューの一番下に追加
+                    control = file_menu.controls.addCommand(cmd_def)
+        
+        # 2. ファイルメニューが見つからなかった、または追加に失敗した場合のフォールバック
         if not control:
-            # 標準の「名前を付けて保存 (SaveAsCommand)」の上に挿入を試みる
-            # 成功すれば標準の「保存」と「名前を付けて保存/バージョンを作成」の間に配置されます
-            try:
-                control = file_menu.controls.addCommand(cmd_def, 'SaveAsCommand')
-            except:
-                # 失敗した場合はメニューの最後に追加
-                control = file_menu.controls.addCommand(cmd_def)
+            control = qat.controls.itemById(COMMAND_ID)
+            if not control:
+                try:
+                    # QAT（左上のツールバー）の標準保存ボタンの隣（Undoの前）に配置
+                    control = qat.controls.addCommand(cmd_def, 'UndoCommand')
+                except:
+                    control = qat.controls.addCommand(cmd_def)
 
         if control:
             control.isVisible = True
         else:
-            _show_message('アドインは起動しましたが、ファイルメニューへのボタン追加に失敗しました。')
+            _show_message('ボタンの追加に失敗しました。')
 
     except:
         _show_message('アドインの起動中にエラーが発生しました。\n\n' + traceback.format_exc())
@@ -165,34 +162,33 @@ def stop(context):
     global _app, _ui, _custom_save_event, _custom_save_handler
     try:
         if _ui:
-            # FileSubMenuからのクリーンアップ
             qat = _ui.toolbars.itemById('QAT')
             if qat:
-                file_menu = qat.controls.itemById('FileSubMenu')
-                if file_menu:
-                    for c_id in (COMMAND_ID, 'FusionDescribedSaveCommandV6'):
-                        control = file_menu.controls.itemById(c_id)
-                        if control:
-                            control.deleteMe()
-                            
-                # 以前のバージョン（QAT直下）のゴミが残っていれば消去
-                for c_id in (COMMAND_ID, 'FusionDescribedSaveCommandV6'):
+                # ファイルメニュー内のクリーンアップ
+                for ctrl in qat.controls:
+                    if ctrl.objectType == adsk.core.DropDownControl.classType() and ('file' in ctrl.id.lower() or 'app' in ctrl.id.lower()):
+                        for c_id in (COMMAND_ID, 'FusionDescribedSaveCommandV7'):
+                            control = ctrl.controls.itemById(c_id)
+                            if control:
+                                control.deleteMe()
+                                
+                # QAT直下のクリーンアップ（フォールバック時）
+                for c_id in (COMMAND_ID, 'FusionDescribedSaveCommandV7'):
                     control = qat.controls.itemById(c_id)
                     if control:
                         control.deleteMe()
 
-            for command_id in (COMMAND_ID, 'FusionDescribedSaveCommandV6'):
+            for command_id in (COMMAND_ID, 'FusionDescribedSaveCommandV7'):
                 cmd_def = _ui.commandDefinitions.itemById(command_id)
                 if cmd_def:
                     cmd_def.deleteMe()
 
         if _app:
-            for event_id in (CUSTOM_EVENT_ID, 'FusionDescribedSaveDeferredEventV6'):
+            for event_id in (CUSTOM_EVENT_ID, 'FusionDescribedSaveDeferredEventV7'):
                 try:
                     _app.unregisterCustomEvent(event_id)
                 except:
                     pass
-
     except:
         pass
     finally:
