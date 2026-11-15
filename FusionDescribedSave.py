@@ -201,28 +201,71 @@ def stop(context):
     global _app, _ui, _custom_save_event, _custom_save_handler, _custom_rebuild_event, _custom_rebuild_handler
     try:
         if _ui:
+            # --------------------------------------------------------
+            # 1. 現在のバージョン（ファイルメニュー・QAT）のクリーンアップ
+            # --------------------------------------------------------
             qat = _ui.toolbars.itemById('QAT')
             if qat:
                 for ctrl in qat.controls:
                     if ctrl.objectType == adsk.core.DropDownControl.classType() and ('file' in ctrl.id.lower() or 'app' in ctrl.id.lower()):
-                        for c_id in (COMMAND_ID, 'FusionDescribedSaveCmd_V11', 'FusionDescribedSaveCmd_V12'):
-                            control = ctrl.controls.itemById(c_id)
-                            if control: control.deleteMe()
+                        # 今回の最新版のIDを削除
+                        control = ctrl.controls.itemById(COMMAND_ID)
+                        if control: control.deleteMe()
                             
-                for c_id in (COMMAND_ID, 'FusionDescribedSaveCmd_V11', 'FusionDescribedSaveCmd_V12'):
-                    control = qat.controls.itemById(c_id)
-                    if control: control.deleteMe()
+                # QAT直下にある場合の削除
+                control = qat.controls.itemById(COMMAND_ID)
+                if control: control.deleteMe()
 
-            for command_id in (COMMAND_ID, 'FusionDescribedSaveCmd_V11', 'FusionDescribedSaveCmd_V12'):
-                cmd_def = _ui.commandDefinitions.itemById(command_id)
+            # --------------------------------------------------------
+            # 2. v1.0.0 以前（過去のリリース版）のゾンビUIのお掃除
+            # --------------------------------------------------------
+            workspace = _ui.workspaces.itemById('FusionSolidEnvironment')
+            if workspace:
+                # v1.0.0 で配置していたパネルを巡回
+                for panel_id in ('SolidCreatePanel', 'SolidModifyPanel'):
+                    panel = workspace.toolbarPanels.itemById(panel_id)
+                    if panel:
+                        # v1.0.0およびそれ以前のIDをすべて消去
+                        for old_ctrl_id in (
+                            'FusionDescribedSaveCommandV6',
+                            'FusionDescribedSaveCommandV5',
+                            'FusionDescribedSaveCommandV4',
+                            'FusionDescribedSaveCommand'
+                        ):
+                            old_ctrl = panel.controls.itemById(old_ctrl_id)
+                            if old_ctrl:
+                                old_ctrl.deleteMe()
+
+            # --------------------------------------------------------
+            # 3. コマンド定義（コマンドそのもの）のお掃除
+            # --------------------------------------------------------
+            for cmd_id in (
+                COMMAND_ID,
+                'FusionDescribedSaveCommandV6',
+                'FusionDescribedSaveCommandV5',
+                'FusionDescribedSaveCommandV4',
+                'FusionDescribedSaveCommand'
+            ):
+                cmd_def = _ui.commandDefinitions.itemById(cmd_id)
                 if cmd_def: cmd_def.deleteMe()
 
         if _app:
-            for event_id in (CUSTOM_SAVE_EVENT_ID, CUSTOM_REBUILD_EVENT_ID, 'FusionDescribedSaveEvent_V11', 'FusionDescribedSaveEvent_V12'):
+            # --------------------------------------------------------
+            # 4. バックグラウンドイベントのお掃除
+            # --------------------------------------------------------
+            for event_id in (
+                CUSTOM_SAVE_EVENT_ID,
+                CUSTOM_REBUILD_EVENT_ID,
+                'FusionDescribedSaveDeferredEventV6',
+                'FusionDescribedSaveDeferredEventV5',
+                'FusionDescribedSaveDeferredEventV4',
+                'FusionDescribedSaveDeferredEvent'
+            ):
                 try:
                     _app.unregisterCustomEvent(event_id)
                 except:
                     pass
+
     except:
         pass
     finally:
