@@ -6,6 +6,6 @@
     "": "Adds a required-description save command to Autodesk Fusion File Menu."
   },
   "version": "1.0.7",
-  "supportedOS": "windows",
+  "supportedOS": "windows|mac",
   "editEnabled": true
 }
