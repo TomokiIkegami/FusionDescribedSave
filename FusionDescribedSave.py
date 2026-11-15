@@ -1,6 +1,5 @@
-# Fusion Described Save v1.0.0
+# Fusion Described Save v1.0.7
 # Autodesk Fusion Python Add-In
-# Uses Fusion's native modal inputBox for a classic one-line description popup.
 
 import adsk.core
 import adsk.fusion
@@ -9,30 +8,92 @@ import traceback
 _app = None
 _ui = None
 _handlers = []
+
+# 保存実行用イベント
+CUSTOM_SAVE_EVENT_ID = 'FusionDescribedSaveEvent_V12'
 _custom_save_event = None
 _custom_save_handler = None
 
+# UI再構築（遅延実行）用イベント
+CUSTOM_REBUILD_EVENT_ID = 'FusionDescribedSaveRebuild_V12'
+_custom_rebuild_event = None
+_custom_rebuild_handler = None
+
 ADDIN_NAME = 'FusionDescribedSave'
-COMMAND_ID = 'FusionDescribedSaveCommandV6'
+COMMAND_ID = 'FusionDescribedSaveCmd_V12'
 COMMAND_NAME = '説明付き保存'
 COMMAND_DESCRIPTION = '説明を入力して、現在のデザインを説明付きで保存します。'
-CUSTOM_EVENT_ID = 'FusionDescribedSaveDeferredEventV6'
-WORKSPACE_ID = 'FusionSolidEnvironment'
-PANEL_ID = 'SolidCreatePanel'
-
 
 def _show_message(message):
     try:
-        if _ui:
-            _ui.messageBox(message, ADDIN_NAME)
+        if _ui: _ui.messageBox(message, ADDIN_NAME)
     except:
         pass
+
+def force_rebuild_ui():
+    """古いボタンを破壊し、新しいボタンを配置する実処理"""
+    global _handlers
+    try:
+        if not _ui: return
+        qat = _ui.toolbars.itemById('QAT')
+        file_menu = None
+        if qat:
+            for ctrl in qat.controls:
+                if ctrl.objectType == adsk.core.DropDownControl.classType() and ('file' in ctrl.id.lower() or 'app' in ctrl.id.lower()):
+                    file_menu = ctrl
+                    break
+
+        # 1. クリーンアップ
+        if file_menu:
+            old_ctrl = file_menu.controls.itemById(COMMAND_ID)
+            if old_ctrl: old_ctrl.deleteMe()
+        if qat:
+            old_qat = qat.controls.itemById(COMMAND_ID)
+            if old_qat: old_qat.deleteMe()
+
+        cmd_def = _ui.commandDefinitions.itemById(COMMAND_ID)
+        if cmd_def: cmd_def.deleteMe()
+
+        _handlers = [h for h in _handlers if not isinstance(h, SaveCommandCreatedHandler)]
+
+        # 2. 再構築
+        cmd_def = _ui.commandDefinitions.addButtonDefinition(COMMAND_ID, COMMAND_NAME, COMMAND_DESCRIPTION)
+        
+        on_created = SaveCommandCreatedHandler()
+        cmd_def.commandCreated.add(on_created)
+        _handlers.append(on_created)
+
+        # 3. 再配置
+        if file_menu:
+            try:
+                new_ctrl = file_menu.controls.addCommand(cmd_def, 'ExportCommand')
+            except:
+                try:
+                    new_ctrl = file_menu.controls.addCommand(cmd_def, 'SaveAsCommand')
+                except:
+                    new_ctrl = file_menu.controls.addCommand(cmd_def)
+            if new_ctrl: new_ctrl.isVisible = True
+        elif qat:
+            new_ctrl = qat.controls.addCommand(cmd_def)
+            if new_ctrl: new_ctrl.isVisible = True
+    except:
+        pass
+
+
+# ==========================================
+# 遅延実行（イベントキューイング）用ハンドラ
+# ==========================================
+class RebuildUIEventHandler(adsk.core.CustomEventHandler):
+    def __init__(self):
+        super().__init__()
+    def notify(self, args):
+        # Fusion本体の重い処理が終わったあとに呼ばれる
+        force_rebuild_ui()
 
 
 class SaveCommandCreatedHandler(adsk.core.CommandCreatedEventHandler):
     def __init__(self):
         super().__init__()
-
     def notify(self, args):
         try:
             cmd = args.command
@@ -42,155 +103,163 @@ class SaveCommandCreatedHandler(adsk.core.CommandCreatedEventHandler):
         except:
             _show_message('入力ポップアップの準備中にエラーが発生しました。\n\n' + traceback.format_exc())
 
-
 class SaveCommandExecuteHandler(adsk.core.CommandEventHandler):
     def __init__(self):
         super().__init__()
-
     def notify(self, args):
         try:
-            # Native modal dialog, similar to Fusion's older description prompt.
-            description, cancelled = _ui.inputBox(
-                'バージョンの説明を入力してください。',
-                '説明付き保存',
-                ''
-            )
-
-            if cancelled:
-                return
-
+            description, cancelled = _ui.inputBox('バージョンの説明を入力してください。', '説明付き保存', '')
+            if cancelled: return
             description = (description or '').strip()
             if not description:
                 _show_message('バージョンの説明が空欄のため、保存を中止しました。')
                 return
-
             doc = _app.activeDocument
             if not doc:
                 _show_message('保存するドキュメントが開かれていません。')
                 return
-
             if not doc.isSaved:
-                _show_message(
-                    'このドキュメントはまだ一度も保存されていません。\n\n'
-                    '先にFusion標準の「名前を付けて保存」で保存先とファイル名を指定してください。'
-                )
+                _show_message('このドキュメントはまだ一度も保存されていません。\n\n先にFusion標準の「名前を付けて保存」で保存先とファイル名を指定してください。')
                 return
-
-            _app.fireCustomEvent(CUSTOM_EVENT_ID, description)
-
+            _app.fireCustomEvent(CUSTOM_SAVE_EVENT_ID, description)
         except:
             _show_message('保存要求の準備中にエラーが発生しました。\n\n' + traceback.format_exc())
-
 
 class DeferredSaveEventHandler(adsk.core.CustomEventHandler):
     def __init__(self):
         super().__init__()
-
     def notify(self, args):
         try:
             description = (args.additionalInfo or '').strip()
-            if not description:
-                _show_message('説明が空欄のため、保存を中止しました。')
-                return
-
+            if not description: return
             doc = _app.activeDocument
-            if not doc:
-                _show_message('保存するドキュメントが見つかりません。')
-                return
-
-            if not doc.isSaved:
-                _show_message(
-                    'このドキュメントは未保存のため、説明付き保存を実行できません。\n'
-                    '先に「名前を付けて保存」を実行してください。'
-                )
-                return
-
+            if not doc: return
+            if not doc.isSaved: return
             result = doc.save(description)
             if result:
                 _show_message('説明付きで保存しました。\n\nバージョンの説明：\n' + description)
             else:
                 _show_message('Fusionが保存に失敗したと報告しました。ネットワーク接続やデータパネルを確認してください。')
-
         except:
             _show_message('説明付き保存中にエラーが発生しました。\n\n' + traceback.format_exc())
 
 
+# ==========================================
+# ワークスペース・ドキュメント切り替え検知
+# ==========================================
+class WorkspaceActivatedHandler(adsk.core.WorkspaceEventHandler):
+    def __init__(self):
+        super().__init__()
+    def notify(self, args):
+        # すぐにUIを作らず、Fusionの処理待ちキューに「あとで作ってね」と投げる
+        if _app: _app.fireCustomEvent(CUSTOM_REBUILD_EVENT_ID)
+
+class DocumentActivatedHandler(adsk.core.DocumentEventHandler):
+    def __init__(self):
+        super().__init__()
+    def notify(self, args):
+        if _app: _app.fireCustomEvent(CUSTOM_REBUILD_EVENT_ID)
+
+
 def run(context):
-    global _app, _ui, _custom_save_event, _custom_save_handler
+    global _app, _ui, _custom_save_event, _custom_save_handler, _custom_rebuild_event, _custom_rebuild_handler
     try:
         _app = adsk.core.Application.get()
         _ui = _app.userInterface
+        
+        adsk.autoTerminate(False)
 
-        _custom_save_event = _app.registerCustomEvent(CUSTOM_EVENT_ID)
+        # 保存用カスタムイベント登録
+        _custom_save_event = _app.registerCustomEvent(CUSTOM_SAVE_EVENT_ID)
         _custom_save_handler = DeferredSaveEventHandler()
         _custom_save_event.add(_custom_save_handler)
         _handlers.append(_custom_save_handler)
 
-        cmd_def = _ui.commandDefinitions.itemById(COMMAND_ID)
-        if not cmd_def:
-            cmd_def = _ui.commandDefinitions.addButtonDefinition(
-                COMMAND_ID, COMMAND_NAME, COMMAND_DESCRIPTION
-            )
+        # UI再構築用カスタムイベント登録（NEW!）
+        _custom_rebuild_event = _app.registerCustomEvent(CUSTOM_REBUILD_EVENT_ID)
+        _custom_rebuild_handler = RebuildUIEventHandler()
+        _custom_rebuild_event.add(_custom_rebuild_handler)
+        _handlers.append(_custom_rebuild_handler)
 
-        on_created = SaveCommandCreatedHandler()
-        cmd_def.commandCreated.add(on_created)
-        _handlers.append(on_created)
+        # 切り替え検知リスナー登録
+        on_workspace_activated = WorkspaceActivatedHandler()
+        _ui.workspaceActivated.add(on_workspace_activated)
+        _handlers.append(on_workspace_activated)
 
-        workspace = _ui.workspaces.itemById(WORKSPACE_ID)
-        if not workspace:
-            _show_message('Fusionのデザイン環境が見つかりませんでした。')
-            return
+        on_document_activated = DocumentActivatedHandler()
+        _app.documentActivated.add(on_document_activated)
+        _handlers.append(on_document_activated)
 
-        panel = workspace.toolbarPanels.itemById(PANEL_ID)
-        if not panel:
-            panel = workspace.toolbarPanels.itemById('SolidModifyPanel')
-
-        if panel:
-            control = panel.controls.itemById(COMMAND_ID)
-            if not control:
-                control = panel.controls.addCommand(cmd_def)
-            control.isPromoted = True
-        else:
-            _show_message('アドインは起動しましたが、配置先のツールバーパネルが見つかりませんでした。')
+        # 初回起動時のUI構築もキューに入れる
+        _app.fireCustomEvent(CUSTOM_REBUILD_EVENT_ID)
 
     except:
-        _show_message('アドインの起動中にエラーが発生しました。\n\n' + traceback.format_exc())
+        _show_message('起動中にエラーが発生しました。\n\n' + traceback.format_exc())
 
 
 def stop(context):
-    global _app, _ui, _custom_save_event, _custom_save_handler
+    global _app, _ui, _custom_save_event, _custom_save_handler, _custom_rebuild_event, _custom_rebuild_handler
     try:
         if _ui:
-            workspace = _ui.workspaces.itemById(WORKSPACE_ID)
+            # --------------------------------------------------------
+            # 1. 現在のバージョン（ファイルメニュー・QAT）のクリーンアップ
+            # --------------------------------------------------------
+            qat = _ui.toolbars.itemById('QAT')
+            if qat:
+                for ctrl in qat.controls:
+                    if ctrl.objectType == adsk.core.DropDownControl.classType() and ('file' in ctrl.id.lower() or 'app' in ctrl.id.lower()):
+                        # 今回の最新版のIDを削除
+                        control = ctrl.controls.itemById(COMMAND_ID)
+                        if control: control.deleteMe()
+                            
+                # QAT直下にある場合の削除
+                control = qat.controls.itemById(COMMAND_ID)
+                if control: control.deleteMe()
+
+            # --------------------------------------------------------
+            # 2. v1.0.0 以前（過去のリリース版）のゾンビUIのお掃除
+            # --------------------------------------------------------
+            workspace = _ui.workspaces.itemById('FusionSolidEnvironment')
             if workspace:
-                for panel_id in (PANEL_ID, 'SolidModifyPanel'):
+                # v1.0.0 で配置していたパネルを巡回
+                for panel_id in ('SolidCreatePanel', 'SolidModifyPanel'):
                     panel = workspace.toolbarPanels.itemById(panel_id)
                     if panel:
-                        for control_id in (
-                            COMMAND_ID,
-                            'FusionDescribedSaveCommand',
-                            'FusionDescribedSaveCommandV4',
+                        # v1.0.0およびそれ以前のIDをすべて消去
+                        for old_ctrl_id in (
+                            'FusionDescribedSaveCommandV6',
                             'FusionDescribedSaveCommandV5',
+                            'FusionDescribedSaveCommandV4',
+                            'FusionDescribedSaveCommand'
                         ):
-                            control = panel.controls.itemById(control_id)
-                            if control:
-                                control.deleteMe()
+                            old_ctrl = panel.controls.itemById(old_ctrl_id)
+                            if old_ctrl:
+                                old_ctrl.deleteMe()
 
-            for command_id in (
-                'FusionDescribedSaveCommand',
-                'FusionDescribedSaveCommandV4',
+            # --------------------------------------------------------
+            # 3. コマンド定義（コマンドそのもの）のお掃除
+            # --------------------------------------------------------
+            for cmd_id in (
+                COMMAND_ID,
+                'FusionDescribedSaveCommandV6',
                 'FusionDescribedSaveCommandV5',
+                'FusionDescribedSaveCommandV4',
+                'FusionDescribedSaveCommand'
             ):
-                cmd_def = _ui.commandDefinitions.itemById(command_id)
-                if cmd_def:
-                    cmd_def.deleteMe()
+                cmd_def = _ui.commandDefinitions.itemById(cmd_id)
+                if cmd_def: cmd_def.deleteMe()
 
         if _app:
+            # --------------------------------------------------------
+            # 4. バックグラウンドイベントのお掃除
+            # --------------------------------------------------------
             for event_id in (
-                'FusionDescribedSaveDeferredEvent',
-                'FusionDescribedSaveDeferredEventV4',
+                CUSTOM_SAVE_EVENT_ID,
+                CUSTOM_REBUILD_EVENT_ID,
+                'FusionDescribedSaveDeferredEventV6',
                 'FusionDescribedSaveDeferredEventV5',
-                CUSTOM_EVENT_ID,
+                'FusionDescribedSaveDeferredEventV4',
+                'FusionDescribedSaveDeferredEvent'
             ):
                 try:
                     _app.unregisterCustomEvent(event_id)
@@ -198,10 +267,12 @@ def stop(context):
                     pass
 
     except:
-        _show_message('アドイン停止時にエラーが発生しました。\n\n' + traceback.format_exc())
+        pass
     finally:
         _handlers.clear()
         _custom_save_event = None
         _custom_save_handler = None
+        _custom_rebuild_event = None
+        _custom_rebuild_handler = None
         _app = None
         _ui = None
